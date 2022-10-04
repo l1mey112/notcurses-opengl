@@ -1,0 +1,14 @@
+{
+	"files.associations": {
+		"glfw3.h": "c",
+		"gl.h": "c",
+		"notcurses.h": "c",
+		"cl.h": "c",
+		"opencl.h": "c",
+		"cl_gl.h": "c",
+		"cl_platform.h": "c",
+		"cmath": "c",
+		"*.tcc": "c",
+		"condition_variable": "c"
+	}
+}
