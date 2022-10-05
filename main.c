@@ -101,7 +101,7 @@ void ncr_blit(NCRenderer *ncr)
 	notcurses_render(ncr->nc);
 }
 
-int main1()
+int main1(void)
 {
 	NCRenderer *ncr = ncr_init(NCBLIT_1x1);
 
@@ -117,19 +117,7 @@ int main1()
 	return 0;
 }
 
-#define CL_TARGET_OPENCL_VERSION 300
-#include <CL/opencl.h>
-
-#include <sys/stat.h>
-
 #define INFO_MSG(strerr) fprintf(stderr, "[%s] %s\n", __func__, (strerr));
-
-#define CL_ASSERT(strerr)  \
-	if (err != CL_SUCCESS) \
-	{                      \
-		INFO_MSG((strerr)) \
-		exit(1);           \
-	}
 
 #define GENERIC_ASSERT(_err, strerr) \
 	if (!(_err))                     \
@@ -137,192 +125,59 @@ int main1()
 		INFO_MSG((strerr))           \
 		exit(1);                     \
 	}
-
-cl_device_id create_device()
-{
-	cl_platform_id platform;
-	cl_device_id dev;
-	int err;
-
-	/* Identify a platform */
-	err = clGetPlatformIDs(1, &platform, NULL);
-	CL_ASSERT("could not identify a platform")
-
-	// Access a device
-	// GPU
-	err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 1, &dev, NULL);
-	if (err == CL_DEVICE_NOT_FOUND)
-	{
-		// CPU
-		err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_CPU, 1, &dev, NULL);
-		INFO_MSG("accessing cpu");
-	}
-	else
-	{
-		INFO_MSG("accessing gpu");
-	}
-	CL_ASSERT("could not get cl compatible device")
-
-	//	// https://community.amd.com/t5/archives-discussions/opencl-optimal-work-group-size/td-p/220026
-	//	// device max work group
-	//	err = clGetDeviceInfo(dev, CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(size_t), work_group_ptr, NULL);
-	//	if (err != CL_SUCCESS) {
-	//		fputs("could not get device information", stderr);
-	//		exit(1);
-	//	}
-	//	fprintf(stderr, "CL_DEVICE_MAX_WORK_GROUP_SIZE = %zu\n", *work_group_ptr);
-
-	return dev;
-}
-
-cl_program add_program(cl_context ctx, cl_device_id dev, const char *filename)
-{
-	FILE *pg = fopen(filename, "r");
-
-	GENERIC_ASSERT(pg != NULL, "failed to locate and open the program file")
-
-	struct stat st;
-	fstat(fileno(pg), &st);
-	size_t pg_size = st.st_size;
-
-	char *pgbuf = malloc(pg_size + 1);
-	pgbuf[pg_size] = 0;
-
-	fread(pgbuf, 1, pg_size, pg);
-	fclose(pg);
-
-	cl_int err;
-
-	cl_program clpg = clCreateProgramWithSource(ctx, 1, (const char **)&pgbuf, &pg_size, &err);
-	CL_ASSERT("failed to create cl program")
-	free(pgbuf);
-
-	// https://rocmdocs.amd.com/en/latest/Programming_Guides/Opencl-programming-guide.html#compilin-host-program
-	err = clBuildProgram(clpg, 0, NULL, NULL, NULL, NULL);
-	if (err != CL_SUCCESS)
-	{
-		INFO_MSG("failed to compile cl program");
-
-		size_t cout_size;
-		err = clGetProgramBuildInfo(clpg, dev, CL_PROGRAM_BUILD_LOG, 0, NULL, &cout_size);
-		CL_ASSERT("failed to get program compilation information")
-
-		char *cout = malloc(cout_size + 1);
-		cout[cout_size] = 0;
-
-		clGetProgramBuildInfo(clpg, dev, CL_PROGRAM_BUILD_LOG, cout_size + 1, cout, NULL);
-		CL_ASSERT("failed to get program compilation information")
-
-		fputs(cout, stderr);
-
-		free(cout);
-		exit(1);
-	}
-
-	return clpg;
-}
-
-//    • Intel recommends workgroup size of 64-128. Often 128 is minimum to
-//    get good performance on GPU
-//    • On NVIDIA Fermi, workgroup size must be at least 192 for full
-//    utilization of cores
-//    • Optimal workgroup size differs across applications
-
-// #define MSG(a, args...) fprintf(stderr, "[%s:%d: %s]: \x1b[92m"a"\x1b[39m\n",__FILE__,__LINE__,__func__,args)
-
-#include <math.h>
+#include <stdlib.h>
+#include <GL/gl.h>
+#include <GL/glx.h>
 
 int main(void)
 {
-	cl_int err;
-	cl_device_id cldevice = create_device();
+	Display *display = NULL;
 
-	cl_context clctx = clCreateContext(NULL, 1, &cldevice, NULL, NULL, &err);
-	CL_ASSERT("could not create a cl context");
-	cl_command_queue clqueue = clCreateCommandQueueWithProperties(clctx, cldevice, 0, &err);
-	CL_ASSERT("could not create a cl command queue");
+	static const int fb_config_attribs[] = {None};
+	static const int context_attribs[] = {
+		GLX_CONTEXT_MAJOR_VERSION_ARB, 3,
+		GLX_CONTEXT_MINOR_VERSION_ARB, 0,
+		None};
+	static const int pbuffer_attribs[] = {
+		GLX_PBUFFER_WIDTH, 640,
+		GLX_PBUFFER_HEIGHT, 480,
+		None};
 
-	cl_program clprogram = add_program(clctx, cldevice, "pg.cl");
-	cl_kernel clkernel = clCreateKernel(clprogram, "vecAdd", &err);
-	CL_ASSERT("could not create a cl kernel");
+	int nitems;
 
-	// Length of vectors
-	unsigned int n = 1000;
-	// Host input vectors
-	double *h_a;
-	double *h_b;
-	// Host output vector
-	double *h_c;
+	typedef GLXContext (*glXCreateContextAttribsARBProc)(Display *, GLXFBConfig, GLXContext, Bool, const int *);
+	typedef Bool (*glXMakeContextCurrentARBProc)(Display *, GLXDrawable, GLXDrawable, GLXContext);
 
-	// Size, in bytes, of each vector
-	size_t bytes = n * sizeof(double);
+	GLXFBConfig *fb_config = NULL;
+	GLXContext context = NULL;
+	GLXPbuffer pbuffer = 0;
 
-	// Allocate memory for each vector on host
-	h_a = (double *)malloc(bytes);
-	h_b = (double *)malloc(bytes);
-	h_c = (double *)malloc(bytes);
+	glXCreateContextAttribsARBProc glXCreateContextAttribsARB;
+	glXMakeContextCurrentARBProc glXMakeContextCurrentARB;
 
-	unsigned int i;
-	for (i = 0; i < n; i++)
+	if (
+		!(display = XOpenDisplay(NULL)) ||
+		!(fb_config = glXChooseFBConfig(display, DefaultScreen(display), fb_config_attribs, &nitems)) ||
+		!(glXCreateContextAttribsARB = (glXCreateContextAttribsARBProc)glXGetProcAddressARB((GLubyte *)"glXCreateContextAttribsARB")) ||
+		!(glXMakeContextCurrentARB = (glXMakeContextCurrentARBProc)glXGetProcAddressARB((GLubyte *)"glXMakeContextCurrent")) ||
+		!(context = glXCreateContextAttribsARB(display, fb_config[0], 0, True, context_attribs)) ||
+		!(pbuffer = glXCreatePbuffer(display, fb_config[0], pbuffer_attribs)))
+		return 1;
+
+	XFree(fb_config);
+	fb_config = NULL;
+
+	XSync(display, False);
+
+	// Bind context.
+	if (!glXMakeContextCurrent(display, pbuffer, pbuffer, context))
 	{
-		h_a[i] = sinf(i) * sinf(i);
-		h_b[i] = cosf(i) * cosf(i);
+		glXDestroyPbuffer(display, pbuffer);
+		pbuffer = 0;
+
+		if (!glXMakeContextCurrent(display, DefaultRootWindow(display), DefaultRootWindow(display), context))
+			return 1;
 	}
 
-	INFO_MSG("start")
 
-	size_t globalSize, localSize;
-	// Number of work items in each local work group
-	localSize = 128;
-
-	// Number of total work items - localSize must be devisor
-	globalSize = ceil(n / (float)localSize) * localSize;
-
-	// Create the input and output arrays in device memory for our calculation
-	// Device input buffers
-	cl_mem d_a = clCreateBuffer(clctx, CL_MEM_USE_HOST_PTR, bytes, h_a, &err);
-	cl_mem d_b = clCreateBuffer(clctx, CL_MEM_USE_HOST_PTR, bytes, h_b, &err);
-	// Device output buffer
-	cl_mem d_c = clCreateBuffer(clctx, CL_MEM_USE_HOST_PTR, bytes, h_c, &err);
-
-	void *d_a_mapped_h = clEnqueueMapBuffer(clqueue, d_a, CL_TRUE, CL_MAP_READ | CL_MAP_WRITE, 0, bytes, 0, NULL, NULL, &err);
-	void *d_b_mapped_h = clEnqueueMapBuffer(clqueue, d_b, CL_TRUE, CL_MAP_READ | CL_MAP_WRITE, 0, bytes, 0, NULL, NULL, &err);
-
-	memcpy(d_a_mapped_h, h_a, bytes);
-	memcpy(d_b_mapped_h, h_b, bytes);
-
-	CL_ASSERT("could not create write buffers");
-
-	// Set the arguments to our compute kernel
-	err = clSetKernelArg(clkernel, 0, sizeof(cl_mem), &d_a);
-	err |= clSetKernelArg(clkernel, 1, sizeof(cl_mem), &d_b);
-	err |= clSetKernelArg(clkernel, 2, sizeof(cl_mem), &d_c);
-	err |= clSetKernelArg(clkernel, 3, sizeof(unsigned int), &n);
-
-	CL_ASSERT("could not set cl kernel arguments");
-
-	err = clEnqueueNDRangeKernel(clqueue, clkernel, 1, NULL, &globalSize, &localSize,
-								 0, NULL, NULL);
-
-	CL_ASSERT("could not execute kernel");
-
-	clFinish(clqueue);
-
-	// Sum up vector c and print result divided by n, this should equal 1 within error
-	double sum = 0;
-	for (i = 0; i < n; i++)
-		sum += h_c[i];
-	printf("final result: %f\n", sum / n);
-
-	clReleaseProgram(clprogram);
-	clReleaseKernel(clkernel);
-	clReleaseCommandQueue(clqueue);
-	clReleaseContext(clctx);
-
-	// release host memory
-	free(h_a);
-	free(h_b);
-	free(h_c);
-
-	return 0;
 }
