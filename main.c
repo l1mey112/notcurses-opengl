@@ -183,16 +183,17 @@ cl_program add_program(cl_context ctx, cl_device_id dev, const char *filename)
 
 	struct stat st;
 	fstat(fileno(pg), &st);
+	size_t pg_size = st.st_size;
 
-	char *pgbuf = malloc(st.st_size + 1);
-	pgbuf[st.st_size] = 0;
+	char *pgbuf = malloc(pg_size + 1);
+	pgbuf[pg_size] = 0;
 
-	fread(pgbuf, 1, st.st_size, pg);
+	fread(pgbuf, 1, pg_size, pg);
 	fclose(pg);
 
 	cl_int err;
 
-	cl_program clpg = clCreateProgramWithSource(ctx, 1, (const char **)&pgbuf, &st.st_size, &err);
+	cl_program clpg = clCreateProgramWithSource(ctx, 1, (const char **)&pgbuf, &pg_size, &err);
 	CL_ASSERT("failed to create cl program")
 	free(pgbuf);
 
@@ -246,7 +247,7 @@ int main(void)
 	CL_ASSERT("could not create a cl kernel");
 
 	// Length of vectors
-	unsigned int n = 100000;
+	unsigned int n = 1000;
 	// Host input vectors
 	double *h_a;
 	double *h_b;
@@ -261,31 +262,34 @@ int main(void)
 	h_b = (double *)malloc(bytes);
 	h_c = (double *)malloc(bytes);
 
-	int i;
+	unsigned int i;
 	for (i = 0; i < n; i++)
 	{
 		h_a[i] = sinf(i) * sinf(i);
 		h_b[i] = cosf(i) * cosf(i);
 	}
 
+	INFO_MSG("start")
+
 	size_t globalSize, localSize;
 	// Number of work items in each local work group
-	localSize = 64;
+	localSize = 128;
 
 	// Number of total work items - localSize must be devisor
 	globalSize = ceil(n / (float)localSize) * localSize;
 
 	// Create the input and output arrays in device memory for our calculation
 	// Device input buffers
-	cl_mem d_a = clCreateBuffer(clctx, CL_MEM_READ_ONLY, bytes, NULL, NULL);
-	cl_mem d_b = clCreateBuffer(clctx, CL_MEM_READ_ONLY, bytes, NULL, NULL);
+	cl_mem d_a = clCreateBuffer(clctx, CL_MEM_USE_HOST_PTR, bytes, h_a, &err);
+	cl_mem d_b = clCreateBuffer(clctx, CL_MEM_USE_HOST_PTR, bytes, h_b, &err);
 	// Device output buffer
-	cl_mem d_c = clCreateBuffer(clctx, CL_MEM_WRITE_ONLY, bytes, NULL, NULL);
+	cl_mem d_c = clCreateBuffer(clctx, CL_MEM_USE_HOST_PTR, bytes, h_c, &err);
 
-	err = clEnqueueWriteBuffer(clqueue, d_a, CL_TRUE, 0,
-							   bytes, h_a, 0, NULL, NULL);
-	err |= clEnqueueWriteBuffer(clqueue, d_b, CL_TRUE, 0,
-								bytes, h_b, 0, NULL, NULL);
+	void *d_a_mapped_h = clEnqueueMapBuffer(clqueue, d_a, CL_TRUE, CL_MAP_READ | CL_MAP_WRITE, 0, bytes, 0, NULL, NULL, &err);
+	void *d_b_mapped_h = clEnqueueMapBuffer(clqueue, d_b, CL_TRUE, CL_MAP_READ | CL_MAP_WRITE, 0, bytes, 0, NULL, NULL, &err);
+
+	memcpy(d_a_mapped_h, h_a, bytes);
+	memcpy(d_b_mapped_h, h_b, bytes);
 
 	CL_ASSERT("could not create write buffers");
 
@@ -304,27 +308,21 @@ int main(void)
 
 	clFinish(clqueue);
 
-	clEnqueueReadBuffer(clqueue, d_c, CL_TRUE, 0,
-						bytes, h_c, 0, NULL, NULL);
-
 	// Sum up vector c and print result divided by n, this should equal 1 within error
 	double sum = 0;
 	for (i = 0; i < n; i++)
 		sum += h_c[i];
 	printf("final result: %f\n", sum / n);
 
-	clReleaseMemObject(d_a);
-    clReleaseMemObject(d_b);
-    clReleaseMemObject(d_c);
-    clReleaseProgram(clprogram);
-    clReleaseKernel(clkernel);
-    clReleaseCommandQueue(clqueue);
-    clReleaseContext(clctx);
+	clReleaseProgram(clprogram);
+	clReleaseKernel(clkernel);
+	clReleaseCommandQueue(clqueue);
+	clReleaseContext(clctx);
 
-	//release host memory
-    free(h_a);
-    free(h_b);
-    free(h_c);
+	// release host memory
+	free(h_a);
+	free(h_b);
+	free(h_c);
 
 	return 0;
 }

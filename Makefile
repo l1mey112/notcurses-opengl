@@ -1,4 +1,8 @@
 .PHONY: run
-run: main.c
-	gcc -ggdb -lnotcurses -lnotcurses-core -lOpenCL -lm main.c
+run: a.out
 	./a.out
+
+a.out: main.c Makefile
+	gcc -lnotcurses -lnotcurses-core -lOpenCL -lm \
+		-Wall -Wextra -pedantic -ggdb \
+		main.c
