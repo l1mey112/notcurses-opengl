@@ -1,5 +1,5 @@
-#include <notcurses/notcurses.h>
 #include <assert.h>
+#include <notcurses/notcurses.h>
 
 typedef struct
 {
@@ -90,12 +90,11 @@ NCRenderer *ncr_init(ncblitter_e nb)
 
 void ncr_blit(NCRenderer *ncr)
 {
-	const struct ncvisual_options opts = {
-		.n = ncr->pl,
-		.scaling = NCSCALE_NONE,
-		.leny = ncr->fb_r_y,
-		.lenx = ncr->fb_r_x,
-		.blitter = ncr->nb};
+	const struct ncvisual_options opts = {.n = ncr->pl,
+										  .scaling = NCSCALE_NONE,
+										  .leny = ncr->fb_r_y,
+										  .lenx = ncr->fb_r_x,
+										  .blitter = ncr->nb};
 
 	ncblit_rgba(ncr->fb, ncr->fb_r_xl, &opts);
 	notcurses_render(ncr->nc);
@@ -125,59 +124,168 @@ int main1(void)
 		INFO_MSG((strerr))           \
 		exit(1);                     \
 	}
-#include <stdlib.h>
-#include <GL/gl.h>
-#include <GL/glx.h>
+
+#include <GL/glew.h>
+#include <GLFW/glfw3.h>
+
+#define SHADER(...) #__VA_ARGS__
+
+#define GL_ASSERT(_str)                       \
+	if (glGetError())                         \
+	{                                         \
+		fprintf(stderr, "ERROR: %s\n", _str); \
+		exit(1);                              \
+	}
+
+#define GENERIC_ASSERT(_expression, _str)     \
+	if (!(_expression))                       \
+	{                                         \
+		fprintf(stderr, "ERROR: %s\n", _str); \
+		exit(1);                              \
+	}
+
+GLuint createcomputeshader(const char *src)
+{
+	GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
+	glShaderSource(shader, 1, &src, NULL); // NULL is nul terminated
+	glCompileShader(shader);
+
+	GLint err;
+	glGetShaderiv(shader, GL_COMPILE_STATUS, &err);
+
+	static GLchar cout[1024] = {0};
+	if (!err)
+	{
+		fprintf(stderr, "ERROR: Failed to compile compute shader");
+
+		glGetShaderInfoLog(shader, 1023, NULL, cout);
+		fprintf(stderr, "%s\n", cout);
+		exit(1);
+	}
+
+	GLuint program = glCreateProgram();
+	glAttachShader(program, shader);
+	glLinkProgram(program);
+	glGetProgramiv(program, GL_LINK_STATUS, &err);
+
+	if (!err)
+	{
+		fprintf(stderr, "ERROR: Failed to link compute shader program");
+
+		glGetShaderInfoLog(shader, 1023, NULL, cout);
+		fprintf(stderr, "%s\n", cout);
+		exit(1);
+	}
+
+	glUseProgram(program);
+
+	GL_ASSERT("Failed to use compute shader program");
+
+	return program;
+}
+
+GLuint createtexture(uint32_t x, uint32_t y, void *data)
+{
+	GLuint texture;
+	glGenTextures(1, &texture);
+
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, texture);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32UI, x, y, 0, GL_RGBA_INTEGER, GL_UNSIGNED_INT, data);
+	GL_ASSERT("Failed to create texture");
+
+	glBindImageTexture(0, texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32UI);
+	GL_ASSERT("Failed to bind texture");
+
+	return texture;
+}
+
+/* typedef struct
+{
+	float x, y, z;
+	float u, v;
+} vertex_t;
+
+const vertex_t vertices[3] = {
+	{3.0, -1.0, 0.5, 2.0, 0.0},
+	{-1.0, 3.0, 0.5, 0.0, 2.0},
+	{-1.0, -1.0, 0.5, 0.0, 0.0},
+};
+// fullscreen triangle (not quad), with correct UVs
+// marcher-engine-gpu.git/main.v:123:2
+
+GLuint getvbo()
+{
+	GLuint vbo;
+	glGenBuffers(1, &vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+} */
 
 int main(void)
 {
-	Display *display = NULL;
-
-	static const int fb_config_attribs[] = {None};
-	static const int context_attribs[] = {
-		GLX_CONTEXT_MAJOR_VERSION_ARB, 3,
-		GLX_CONTEXT_MINOR_VERSION_ARB, 0,
-		None};
-	static const int pbuffer_attribs[] = {
-		GLX_PBUFFER_WIDTH, 640,
-		GLX_PBUFFER_HEIGHT, 480,
-		None};
-
-	int nitems;
-
-	typedef GLXContext (*glXCreateContextAttribsARBProc)(Display *, GLXFBConfig, GLXContext, Bool, const int *);
-	typedef Bool (*glXMakeContextCurrentARBProc)(Display *, GLXDrawable, GLXDrawable, GLXContext);
-
-	GLXFBConfig *fb_config = NULL;
-	GLXContext context = NULL;
-	GLXPbuffer pbuffer = 0;
-
-	glXCreateContextAttribsARBProc glXCreateContextAttribsARB;
-	glXMakeContextCurrentARBProc glXMakeContextCurrentARB;
-
-	if (
-		!(display = XOpenDisplay(NULL)) ||
-		!(fb_config = glXChooseFBConfig(display, DefaultScreen(display), fb_config_attribs, &nitems)) ||
-		!(glXCreateContextAttribsARB = (glXCreateContextAttribsARBProc)glXGetProcAddressARB((GLubyte *)"glXCreateContextAttribsARB")) ||
-		!(glXMakeContextCurrentARB = (glXMakeContextCurrentARBProc)glXGetProcAddressARB((GLubyte *)"glXMakeContextCurrent")) ||
-		!(context = glXCreateContextAttribsARB(display, fb_config[0], 0, True, context_attribs)) ||
-		!(pbuffer = glXCreatePbuffer(display, fb_config[0], pbuffer_attribs)))
-		return 1;
-
-	XFree(fb_config);
-	fb_config = NULL;
-
-	XSync(display, False);
-
-	// Bind context.
-	if (!glXMakeContextCurrent(display, pbuffer, pbuffer, context))
+	if (!glfwInit())
 	{
-		glXDestroyPbuffer(display, pbuffer);
-		pbuffer = 0;
-
-		if (!glXMakeContextCurrent(display, DefaultRootWindow(display), DefaultRootWindow(display), context))
-			return 1;
+		fprintf(stderr, "ERROR: Failed to initialise GLFW\n");
+		return 1;
 	}
 
+	glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+	GLFWwindow *offscreen_context = glfwCreateWindow(640, 480, "", NULL, NULL);
+	if (!offscreen_context)
+	{
+		fprintf(stderr, "ERROR: Failed to create a fake window\n");
+		return 1;
+	}
+	glfwMakeContextCurrent(offscreen_context);
 
+	if (glewInit())
+	{
+		fprintf(stderr, "ERROR: Failed to initialise GLEW\n");
+		glfwTerminate();
+		return 1;
+	}
+
+	printf(
+		"Vendor: %s\n"
+		"Renderer: %s\n"
+		"Version: %s\n"
+		"Shader language: %s\n\n",
+		glGetString(GL_VENDOR), glGetString(GL_RENDERER), glGetString(GL_VERSION),
+		glGetString(GL_SHADING_LANGUAGE_VERSION));
+
+	/* GLuint shader = createcomputeshader("#version 430\n"SHADER(
+		uniform writeonly image2D destTex;
+		layout(local_size_x = 16, local_size_y = 16) in;
+		void main() {
+			ivec2 storePos = ivec2(gl_GlobalInvocationID.xy);
+			imageStore(destTex, storePos, 1.0f, 1.0f, 1.0f, 1.0f);
+		}
+	)); */
+
+	GLuint fbo;
+	glGenFramebuffers(1, &fbo);
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+	GLuint texture;
+	glGenTextures(1, &texture);
+	glBindTexture(GL_TEXTURE_2D, texture);
+
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 800, 600, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+
+	GENERIC_ASSERT(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
+				   "Framebuffer is not complete");
+
+	//	glDeleteTextures(1, &texColorBuffer);
+	glfwTerminate();
 }
