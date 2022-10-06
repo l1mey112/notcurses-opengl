@@ -116,15 +116,6 @@ int main1(void)
 	return 0;
 }
 
-#define INFO_MSG(strerr) fprintf(stderr, "[%s] %s\n", __func__, (strerr));
-
-#define GENERIC_ASSERT(_err, strerr) \
-	if (!(_err))                     \
-	{                                \
-		INFO_MSG((strerr))           \
-		exit(1);                     \
-	}
-
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 
@@ -144,44 +135,76 @@ int main1(void)
 		exit(1);                              \
 	}
 
-GLuint createcomputeshader(const char *src)
+#include <sys/stat.h>
+
+char *read_file(const char* filename) {
+	FILE *pg = fopen(filename, "r");
+
+	GENERIC_ASSERT(pg != NULL, "Failed to locate and open the program file")
+
+	struct stat st;
+	fstat(fileno(pg), &st);
+	size_t pg_size = st.st_size;
+
+	char *pgbuf = malloc(pg_size + 1);
+	pgbuf[pg_size] = 0;
+
+	fread(pgbuf, 1, pg_size, pg);
+	fclose(pg);
+
+	return pgbuf;
+}
+
+GLuint make_shader(const char *src, GLenum shader_type)
 {
-	GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
+	GLuint shader = glCreateShader(shader_type);
 	glShaderSource(shader, 1, &src, NULL); // NULL is nul terminated
 	glCompileShader(shader);
 
 	GLint err;
 	glGetShaderiv(shader, GL_COMPILE_STATUS, &err);
 
-	static GLchar cout[1024] = {0};
 	if (!err)
 	{
-		fprintf(stderr, "ERROR: Failed to compile compute shader");
+		GLchar cout[1024];
+		fprintf(stderr, "ERROR: Failed to compile shader");
 
 		glGetShaderInfoLog(shader, 1023, NULL, cout);
 		fprintf(stderr, "%s\n", cout);
 		exit(1);
 	}
 
-	GLuint program = glCreateProgram();
-	glAttachShader(program, shader);
-	glLinkProgram(program);
-	glGetProgramiv(program, GL_LINK_STATUS, &err);
+	return shader;
+}
+
+// Warning: will delete both shaders
+GLuint link_shaders(GLuint vert, GLuint frag, GLuint fbo)
+{
+	GLuint shader_program = glCreateProgram();
+	glAttachShader(shader_program, vert);
+	glAttachShader(shader_program, frag);
+	glBindFragDataLocation(shader_program, fbo, "FragColor");
+
+	glLinkProgram(shader_program);
+
+	GLint err;
+
+	glGetProgramiv(shader_program, GL_LINK_STATUS, &err);
 
 	if (!err)
 	{
+		GLchar cout[1024];
 		fprintf(stderr, "ERROR: Failed to link compute shader program");
 
-		glGetShaderInfoLog(shader, 1023, NULL, cout);
+		glGetShaderInfoLog(shader_program, 1023, NULL, cout);
 		fprintf(stderr, "%s\n", cout);
 		exit(1);
 	}
 
-	glUseProgram(program);
+	glDeleteShader(vert);
+	glDeleteShader(frag);
 
-	GL_ASSERT("Failed to use compute shader program");
-
-	return program;
+	return shader_program;
 }
 
 GLuint createtexture(uint32_t x, uint32_t y, void *data)
@@ -205,27 +228,35 @@ GLuint createtexture(uint32_t x, uint32_t y, void *data)
 	return texture;
 }
 
-/* typedef struct
+#include <assert.h>
+
+typedef struct
 {
-	float x, y, z;
-	float u, v;
+	union
+	{
+		struct
+		{
+			float x, y, z;
+		};
+		float xyz[3];
+	};
+	union
+	{
+		struct
+		{
+			float u, v;
+		};
+		float uv[2];
+	};
 } vertex_t;
 
-const vertex_t vertices[3] = {
-	{3.0, -1.0, 0.5, 2.0, 0.0},
-	{-1.0, 3.0, 0.5, 0.0, 2.0},
-	{-1.0, -1.0, 0.5, 0.0, 0.0},
+const vertex_t vertices[] = {
+	{{{3.0, -1.0, 0.5}}, {{2.0, 0.0}}},
+	{{{-1.0, 3.0, 0.5}}, {{0.0, 2.0}}},
+	{{{-1.0, -1.0, 0.5}}, {{0.0, 0.0}}},
 };
 // fullscreen triangle (not quad), with correct UVs
 // marcher-engine-gpu.git/main.v:123:2
-
-GLuint getvbo()
-{
-	GLuint vbo;
-	glGenBuffers(1, &vbo);
-	glBindBuffer(GL_ARRAY_BUFFER, vbo);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-} */
 
 int main(void)
 {
@@ -235,7 +266,7 @@ int main(void)
 		return 1;
 	}
 
-	glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+	glfwWindowHint(GLFW_VISIBLE, /* GLFW_FALSE */ GLFW_TRUE);
 	GLFWwindow *offscreen_context = glfwCreateWindow(640, 480, "", NULL, NULL);
 	if (!offscreen_context)
 	{
@@ -251,6 +282,8 @@ int main(void)
 		return 1;
 	}
 
+	glfwMakeContextCurrent(offscreen_context);
+
 	printf(
 		"Vendor: %s\n"
 		"Renderer: %s\n"
@@ -259,33 +292,55 @@ int main(void)
 		glGetString(GL_VENDOR), glGetString(GL_RENDERER), glGetString(GL_VERSION),
 		glGetString(GL_SHADING_LANGUAGE_VERSION));
 
-	/* GLuint shader = createcomputeshader("#version 430\n"SHADER(
-		uniform writeonly image2D destTex;
-		layout(local_size_x = 16, local_size_y = 16) in;
-		void main() {
-			ivec2 storePos = ivec2(gl_GlobalInvocationID.xy);
-			imageStore(destTex, storePos, 1.0f, 1.0f, 1.0f, 1.0f);
-		}
-	)); */
+	GLuint vert = make_shader("#version 330 core\n" SHADER(
+								  layout (location = 0) in vec3 pos;
+								  layout (location = 1) in vec2 texcoord;
+								  out vec2 uv;
+								  void main() {
+									  gl_Position = vec4(pos.x, pos.y, pos.z, 1.0);
+									  uv = texcoord;
+								  }),
+							  GL_VERTEX_SHADER);
 
-	GLuint fbo;
-	glGenFramebuffers(1, &fbo);
-	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+	GLuint frag = make_shader("#version 330 core\n" SHADER(
+								  out vec4 FragColor;
+								  in vec2 uv;
+								  void main() {
+									  FragColor = vec4(uv, 1.0f, 1.0f);
+								  }),
+							  GL_FRAGMENT_SHADER);
 
-	GLuint texture;
-	glGenTextures(1, &texture);
-	glBindTexture(GL_TEXTURE_2D, texture);
+	GLuint shader_program = link_shaders(vert, frag, 0);
 
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 800, 600, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+	GLuint VBO;
+	glGenBuffers(1, &VBO);
 
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glBindBuffer(GL_ARRAY_BUFFER, VBO);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+	GLuint VAO;
+	glGenVertexArrays(1, &VAO);
+	glBindVertexArray(VAO);
 
-	GENERIC_ASSERT(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
-				   "Framebuffer is not complete");
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(vertex_t), (void *)0);
+	glEnableVertexAttribArray(0);
 
-	//	glDeleteTextures(1, &texColorBuffer);
+	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(vertex_t), (void *)(sizeof(vertices->xyz)));
+	glEnableVertexAttribArray(1);
+
+	while (!glfwWindowShouldClose(offscreen_context))
+	{
+		glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+		glClear(GL_COLOR_BUFFER_BIT);
+		glUseProgram(shader_program);
+
+		glDrawArrays(GL_TRIANGLES, 0, 3);
+		glfwSwapBuffers(offscreen_context);
+	}
+
+	glDeleteVertexArrays(1, &VAO);
+	glDeleteBuffers(1, &VBO);
+	glDeleteProgram(shader_program);
+
 	glfwTerminate();
 }
