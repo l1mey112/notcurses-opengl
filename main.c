@@ -1,5 +1,7 @@
 #include <assert.h>
 #include <notcurses/notcurses.h>
+#include <GL/glew.h>
+#include <GLFW/glfw3.h>
 
 typedef struct
 {
@@ -8,6 +10,9 @@ typedef struct
 	ncblitter_e nb;
 
 	uint32_t *fb, fb_r_x, fb_r_xl, fb_r_y, fb_x, fb_y;
+
+	GLuint fbo, fbtex;
+	GLFWwindow *offscreen_ctx;
 } NCRenderer;
 
 static inline size_t ncr_sizeof_fb(NCRenderer *ncr)
@@ -71,53 +76,11 @@ void ncr_fullscreen(NCRenderer *ncr)
 		ncr->fb = malloc(ncr_sizeof_fb(ncr));
 
 		assert(ncr->fb);
+
+		glViewport(0, 0, ncr->fb_r_x, ncr->fb_r_y);
+		glTexImage2D(GL_TEXTURE_2D, 0,  GL_RGBA, ncr->fb_r_x, ncr->fb_r_y, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 	}
 }
-
-NCRenderer *ncr_init(ncblitter_e nb)
-{
-	NCRenderer *ncr = malloc(sizeof(NCRenderer));
-
-	ncr->nc = notcurses_init(NULL, stdout);
-	ncr->pl = notcurses_stdplane(ncr->nc);
-	ncr->nb = nb;
-
-	ncr->fb = NULL;
-
-	ncr_fullscreen(ncr);
-	return ncr;
-}
-
-void ncr_blit(NCRenderer *ncr)
-{
-	const struct ncvisual_options opts = {.n = ncr->pl,
-										  .scaling = NCSCALE_NONE,
-										  .leny = ncr->fb_r_y,
-										  .lenx = ncr->fb_r_x,
-										  .blitter = ncr->nb};
-
-	ncblit_rgba(ncr->fb, ncr->fb_r_xl, &opts);
-	notcurses_render(ncr->nc);
-}
-
-int main1(void)
-{
-	NCRenderer *ncr = ncr_init(NCBLIT_1x1);
-
-	for (;;)
-	{
-		ncr_fullscreen(ncr);
-
-		memset(ncr->fb, 255, ncr_sizeof_fb(ncr));
-
-		ncr_blit(ncr);
-	};
-
-	return 0;
-}
-
-#include <GL/glew.h>
-#include <GLFW/glfw3.h>
 
 #define SHADER(...) #__VA_ARGS__
 
@@ -135,9 +98,97 @@ int main1(void)
 		exit(1);                              \
 	}
 
+NCRenderer *ncr_init_opengl(ncblitter_e nb)
+{
+	NCRenderer *ncr = malloc(sizeof(NCRenderer));
+
+	if (!glfwInit())
+	{
+		fprintf(stderr, "ERROR: Failed to initialise GLFW\n");
+		exit(1);
+	}
+
+	glfwWindowHint(GLFW_VISIBLE, 0);
+	GLFWwindow *offscreen_context = glfwCreateWindow(640, 480, "", NULL, NULL);
+	if (!offscreen_context)
+	{
+		fprintf(stderr, "ERROR: Failed to create a fake window\n");
+		exit(1);
+	}
+
+	glfwMakeContextCurrent(offscreen_context);
+
+	if (glewInit())
+	{
+		fprintf(stderr, "ERROR: Failed to initialise GLEW\n");
+		glfwTerminate();
+		exit(1);
+	}
+
+	printf("Vendor: %s\n"
+		   "Renderer: %s\n"
+		   "Version: %s\n"
+		   "Shader language: %s\n",
+		   glGetString(GL_VENDOR), glGetString(GL_RENDERER), glGetString(GL_VERSION),
+		   glGetString(GL_SHADING_LANGUAGE_VERSION));
+
+	GLuint fbo;
+	glGenFramebuffers(1, &fbo);
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+	unsigned int fbtex;
+    glGenTextures(1, &fbtex);
+    glBindTexture(GL_TEXTURE_2D, fbtex);
+    glTexImage2D(GL_TEXTURE_2D, 0,  GL_RGBA, 640, 480, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fbtex, 0);
+
+	GENERIC_ASSERT(glCheckNamedFramebufferStatus(fbo, GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
+				   "Failed to create framebuffer object");
+	
+	ncr->nc = notcurses_init(NULL, stdout);
+	ncr->pl = notcurses_stdplane(ncr->nc);
+	ncr->nb = nb;
+	ncr->fb = NULL;
+
+	ncr->fbo = fbo;
+	ncr->fbtex = fbtex;
+	ncr->offscreen_ctx = offscreen_context;
+
+	ncr->fb_x = ncr->fb_y = -1;
+	ncr_fullscreen(ncr);
+
+	return ncr;
+}
+
+void ncr_cleanup(NCRenderer *ncr)
+{
+	glDeleteTextures(1,&ncr->fbtex);
+	glDeleteFramebuffers(1, &ncr->fbo);
+	glfwTerminate();
+}
+
+void ncr_blit(NCRenderer *ncr)
+{
+//	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+//	glActiveTexture(GL_TEXTURE0);
+	glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, ncr->fb);
+
+	const struct ncvisual_options opts = {.n = ncr->pl,
+										  .scaling = NCSCALE_NONE,
+										  .leny = ncr->fb_r_y,
+										  .lenx = ncr->fb_r_x,
+										  .blitter = ncr->nb};
+
+	ncblit_rgba(ncr->fb, ncr->fb_r_xl, &opts);
+	notcurses_render(ncr->nc);
+}
+
 #include <sys/stat.h>
 
-char *read_file(const char* filename) {
+char *read_file(const char *filename)
+{
 	FILE *pg = fopen(filename, "r");
 
 	GENERIC_ASSERT(pg != NULL, "Failed to locate and open the program file")
@@ -183,7 +234,7 @@ GLuint link_shaders(GLuint vert, GLuint frag, GLuint fbo)
 	GLuint shader_program = glCreateProgram();
 	glAttachShader(shader_program, vert);
 	glAttachShader(shader_program, frag);
-	glBindFragDataLocation(shader_program, fbo, "FragColor");
+	glBindFragDataLocation(shader_program, fbo, "fragment");
 
 	glLinkProgram(shader_program);
 
@@ -260,56 +311,10 @@ const vertex_t vertices[] = {
 
 int main(void)
 {
-	if (!glfwInit())
-	{
-		fprintf(stderr, "ERROR: Failed to initialise GLFW\n");
-		return 1;
-	}
+	NCRenderer *ncr = ncr_init_opengl(NCBLIT_1x1);
 
-	glfwWindowHint(GLFW_VISIBLE, /* GLFW_FALSE */ GLFW_TRUE);
-	GLFWwindow *offscreen_context = glfwCreateWindow(640, 480, "", NULL, NULL);
-	if (!offscreen_context)
-	{
-		fprintf(stderr, "ERROR: Failed to create a fake window\n");
-		return 1;
-	}
-	glfwMakeContextCurrent(offscreen_context);
-
-	if (glewInit())
-	{
-		fprintf(stderr, "ERROR: Failed to initialise GLEW\n");
-		glfwTerminate();
-		return 1;
-	}
-
-	glfwMakeContextCurrent(offscreen_context);
-
-	printf(
-		"Vendor: %s\n"
-		"Renderer: %s\n"
-		"Version: %s\n"
-		"Shader language: %s\n\n",
-		glGetString(GL_VENDOR), glGetString(GL_RENDERER), glGetString(GL_VERSION),
-		glGetString(GL_SHADING_LANGUAGE_VERSION));
-
-	GLuint vert = make_shader("#version 330 core\n" SHADER(
-								  layout (location = 0) in vec3 pos;
-								  layout (location = 1) in vec2 texcoord;
-								  out vec2 uv;
-								  void main() {
-									  gl_Position = vec4(pos.x, pos.y, pos.z, 1.0);
-									  uv = texcoord;
-								  }),
-							  GL_VERTEX_SHADER);
-
-	GLuint frag = make_shader("#version 330 core\n" SHADER(
-								  out vec4 FragColor;
-								  in vec2 uv;
-								  void main() {
-									  FragColor = vec4(uv, 1.0f, 1.0f);
-								  }),
-							  GL_FRAGMENT_SHADER);
-
+	GLuint vert = make_shader(read_file("vert.glsl"), GL_VERTEX_SHADER);
+	GLuint frag = make_shader(read_file("frag.glsl"), GL_FRAGMENT_SHADER);
 	GLuint shader_program = link_shaders(vert, frag, 0);
 
 	GLuint VBO;
@@ -328,19 +333,23 @@ int main(void)
 	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(vertex_t), (void *)(sizeof(vertices->xyz)));
 	glEnableVertexAttribArray(1);
 
-	while (!glfwWindowShouldClose(offscreen_context))
+	for (;;)
 	{
-		glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+		ncr_fullscreen(ncr);
+		
+		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
 		glUseProgram(shader_program);
 
 		glDrawArrays(GL_TRIANGLES, 0, 3);
-		glfwSwapBuffers(offscreen_context);
-	}
+
+		ncr_blit(ncr);
+
+		// glfwSwapBuffers(offscreen_context);
+	};
 
 	glDeleteVertexArrays(1, &VAO);
 	glDeleteBuffers(1, &VBO);
 	glDeleteProgram(shader_program);
-
-	glfwTerminate();
+	ncr_cleanup(ncr);
 }
