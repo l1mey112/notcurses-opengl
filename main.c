@@ -1,7 +1,8 @@
-#include <assert.h>
 #include <notcurses/notcurses.h>
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
+#include <assert.h>
+#include <sys/stat.h>
 
 typedef struct
 {
@@ -78,18 +79,9 @@ void ncr_fullscreen(NCRenderer *ncr)
 		assert(ncr->fb);
 
 		glViewport(0, 0, ncr->fb_r_x, ncr->fb_r_y);
-		glTexImage2D(GL_TEXTURE_2D, 0,  GL_RGBA, ncr->fb_r_x, ncr->fb_r_y, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, ncr->fb_r_x, ncr->fb_r_y, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 	}
 }
-
-#define SHADER(...) #__VA_ARGS__
-
-#define GL_ASSERT(_str)                       \
-	if (glGetError())                         \
-	{                                         \
-		fprintf(stderr, "ERROR: %s\n", _str); \
-		exit(1);                              \
-	}
 
 #define GENERIC_ASSERT(_expression, _str)     \
 	if (!(_expression))                       \
@@ -98,7 +90,7 @@ void ncr_fullscreen(NCRenderer *ncr)
 		exit(1);                              \
 	}
 
-NCRenderer *ncr_init_opengl(ncblitter_e nb)
+NCRenderer *ncr_init_opengl(void)
 {
 	NCRenderer *ncr = malloc(sizeof(NCRenderer));
 
@@ -137,43 +129,47 @@ NCRenderer *ncr_init_opengl(ncblitter_e nb)
 	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 
 	unsigned int fbtex;
-    glGenTextures(1, &fbtex);
-    glBindTexture(GL_TEXTURE_2D, fbtex);
-    glTexImage2D(GL_TEXTURE_2D, 0,  GL_RGBA, 640, 480, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fbtex, 0);
+	glGenTextures(1, &fbtex);
+	glBindTexture(GL_TEXTURE_2D, fbtex);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 640, 480, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fbtex, 0);
 
 	GENERIC_ASSERT(glCheckNamedFramebufferStatus(fbo, GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
 				   "Failed to create framebuffer object");
-	
-	ncr->nc = notcurses_init(NULL, stdout);
-	ncr->pl = notcurses_stdplane(ncr->nc);
-	ncr->nb = nb;
-	ncr->fb = NULL;
 
 	ncr->fbo = fbo;
 	ncr->fbtex = fbtex;
 	ncr->offscreen_ctx = offscreen_context;
 
+	return ncr;
+}
+
+void ncr_init_notcurses(NCRenderer *ncr, ncblitter_e nb)
+{
+	ncr->nc = notcurses_init(NULL, stdout);
+	ncr->pl = notcurses_stdplane(ncr->nc);
+	ncr->nb = nb;
+	ncr->fb = NULL;
+
 	ncr->fb_x = ncr->fb_y = -1;
 	ncr_fullscreen(ncr);
-
-	return ncr;
 }
 
 void ncr_cleanup(NCRenderer *ncr)
 {
-	glDeleteTextures(1,&ncr->fbtex);
+	glDeleteTextures(1, &ncr->fbtex);
 	glDeleteFramebuffers(1, &ncr->fbo);
 	glfwTerminate();
 }
 
 void ncr_blit(NCRenderer *ncr)
 {
-//	glPixelStorei(GL_PACK_ALIGNMENT, 1);
-//	glActiveTexture(GL_TEXTURE0);
+	//	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+	glActiveTexture(GL_TEXTURE0);
 	glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, ncr->fb);
+	// glReadPixels(0, 0, ncr->fb_r_x, ncr->fb_r_y, GL_RGBA, GL_UNSIGNED_BYTE, ncr->fb);
 
 	const struct ncvisual_options opts = {.n = ncr->pl,
 										  .scaling = NCSCALE_NONE,
@@ -183,9 +179,9 @@ void ncr_blit(NCRenderer *ncr)
 
 	ncblit_rgba(ncr->fb, ncr->fb_r_xl, &opts);
 	notcurses_render(ncr->nc);
-}
 
-#include <sys/stat.h>
+	// glfwSwapBuffers(ncr->offscreen_ctx);
+}
 
 char *read_file(const char *filename)
 {
@@ -218,7 +214,7 @@ GLuint make_shader(const char *src, GLenum shader_type)
 	if (!err)
 	{
 		GLchar cout[1024];
-		fprintf(stderr, "ERROR: Failed to compile shader");
+		fprintf(stderr, "ERROR: Failed to compile shader\n\n");
 
 		glGetShaderInfoLog(shader, 1023, NULL, cout);
 		fprintf(stderr, "%s\n", cout);
@@ -258,29 +254,6 @@ GLuint link_shaders(GLuint vert, GLuint frag, GLuint fbo)
 	return shader_program;
 }
 
-GLuint createtexture(uint32_t x, uint32_t y, void *data)
-{
-	GLuint texture;
-	glGenTextures(1, &texture);
-
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, texture);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32UI, x, y, 0, GL_RGBA_INTEGER, GL_UNSIGNED_INT, data);
-	GL_ASSERT("Failed to create texture");
-
-	glBindImageTexture(0, texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32UI);
-	GL_ASSERT("Failed to bind texture");
-
-	return texture;
-}
-
-#include <assert.h>
-
 typedef struct
 {
 	union
@@ -302,16 +275,20 @@ typedef struct
 } vertex_t;
 
 const vertex_t vertices[] = {
-	{{{3.0, -1.0, 0.5}}, {{2.0, 0.0}}},
-	{{{-1.0, 3.0, 0.5}}, {{0.0, 2.0}}},
-	{{{-1.0, -1.0, 0.5}}, {{0.0, 0.0}}},
+	{{{3.0, 1.0, 0.5}}, {{2.0, 0.0}}},
+	{{{-1.0, -3.0, 0.5}}, {{0.0, 2.0}}},
+	{{{-1.0, 1.0, 0.5}}, {{0.0, 0.0}}},
 };
 // fullscreen triangle (not quad), with correct UVs
 // marcher-engine-gpu.git/main.v:123:2
+// 
+// flipped upside down because pixels taken from the framebuffer
+// are inverted in opengl. if it was a normal window i would not
+// have to do this at all.
 
 int main(void)
 {
-	NCRenderer *ncr = ncr_init_opengl(NCBLIT_1x1);
+	NCRenderer *ncr = ncr_init_opengl();
 
 	GLuint vert = make_shader(read_file("vert.glsl"), GL_VERTEX_SHADER);
 	GLuint frag = make_shader(read_file("frag.glsl"), GL_FRAGMENT_SHADER);
@@ -333,10 +310,12 @@ int main(void)
 	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(vertex_t), (void *)(sizeof(vertices->xyz)));
 	glEnableVertexAttribArray(1);
 
+	ncr_init_notcurses(ncr, NCBLIT_1x1);
+
 	for (;;)
 	{
 		ncr_fullscreen(ncr);
-		
+
 		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
 		glUseProgram(shader_program);
@@ -344,8 +323,6 @@ int main(void)
 		glDrawArrays(GL_TRIANGLES, 0, 3);
 
 		ncr_blit(ncr);
-
-		// glfwSwapBuffers(offscreen_context);
 	};
 
 	glDeleteVertexArrays(1, &VAO);
