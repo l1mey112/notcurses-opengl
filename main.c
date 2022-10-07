@@ -55,9 +55,31 @@ void ncr_recalculate_dimensions(NCRenderer *ncr)
 	ncr->fb_r_xl = ncr->fb_r_x * sizeof(uint32_t);
 }
 
-static inline float ncr_aspect(NCRenderer *ncr)
+typedef union
 {
-	return (float)ncr->fb_x / (float)ncr->fb_y;
+	struct
+	{
+		float x, y;
+	};
+	float xy[2];
+} vec2_t;
+
+static inline vec2_t ncr_aspect(NCRenderer *ncr)
+{
+	vec2_t ret;
+
+	if (ncr->fb_x >= ncr->fb_y)
+	{
+		ret.x = (float)ncr->fb_x / (float)ncr->fb_y / 2.0f;
+		ret.y = 1.0f;
+	}
+	else
+	{
+		ret.x = 1.0f;
+		ret.y = (float)ncr->fb_y / (float)ncr->fb_x / 2.0f;
+	}
+
+	return ret;
 }
 
 void ncr_fullscreen(NCRenderer *ncr)
@@ -157,7 +179,7 @@ void ncr_init_notcurses(NCRenderer *ncr, ncblitter_e nb)
 	ncr_fullscreen(ncr);
 }
 
-void ncr_cleanup(NCRenderer *ncr)
+void ncr_cleanup_opengl(NCRenderer *ncr)
 {
 	glDeleteTextures(1, &ncr->fbtex);
 	glDeleteFramebuffers(1, &ncr->fbo);
@@ -281,10 +303,16 @@ const vertex_t vertices[] = {
 };
 // fullscreen triangle (not quad), with correct UVs
 // marcher-engine-gpu.git/main.v:123:2
-// 
+//
 // flipped upside down because pixels taken from the framebuffer
 // are inverted in opengl. if it was a normal window i would not
 // have to do this at all.
+#define NANOSECS_IN_SEC 1000000000
+static inline uint64_t
+timespec_to_ns(const struct timespec *ts)
+{
+	return ts->tv_sec * NANOSECS_IN_SEC + ts->tv_nsec;
+}
 
 int main(void)
 {
@@ -293,6 +321,11 @@ int main(void)
 	GLuint vert = make_shader(read_file("vert.glsl"), GL_VERTEX_SHADER);
 	GLuint frag = make_shader(read_file("frag.glsl"), GL_FRAGMENT_SHADER);
 	GLuint shader_program = link_shaders(vert, frag, 0);
+
+	int ul = glGetUniformLocation(shader_program, "aspect");
+	assert(ul != -1);
+
+	glUseProgram(shader_program);
 
 	GLuint VBO;
 	glGenBuffers(1, &VBO);
@@ -312,21 +345,84 @@ int main(void)
 
 	ncr_init_notcurses(ncr, NCBLIT_1x1);
 
+#define FPSGRAPH_MAX_COLS 72
+
+	const int PLOTHEIGHT = 6;
+	unsigned dimy, dimx;
+	struct ncplane *stdn = notcurses_stddim_yx(ncr->nc, &dimy, &dimx);
+	ncplane_options nopts = {
+		.y = NCALIGN_BOTTOM,
+		.x = NCALIGN_CENTER,
+		.rows = PLOTHEIGHT,
+		.cols = dimx > FPSGRAPH_MAX_COLS ? FPSGRAPH_MAX_COLS : dimx,
+		.userptr = NULL,
+		.name = "fps",
+		.resizecb = ncplane_resize_realign,
+		.flags = NCPLANE_OPTION_HORALIGNED | NCPLANE_OPTION_VERALIGNED | NCPLANE_OPTION_FIXED,
+	};
+	struct ncplane *newp = ncplane_create(stdn, &nopts);
+	if (newp == NULL)
+	{
+		return -1;
+	}
+	uint32_t style = 0;
+	uint64_t channels = 0;
+	ncchannels_set_fg_alpha(&channels, NCALPHA_BLEND);
+	ncchannels_set_fg_rgb(&channels, 0x201040);
+	ncchannels_set_bg_alpha(&channels, NCALPHA_BLEND);
+	ncchannels_set_bg_rgb(&channels, 0x201040);
+	ncplane_set_base(newp, "", style, channels);
+	ncplot_options opts;
+	memset(&opts, 0, sizeof(opts));
+	opts.flags = NCPLOT_OPTION_LABELTICKSD |
+				 NCPLOT_OPTION_EXPONENTIALD |
+				 NCPLOT_OPTION_DETECTMAXONLY |
+				 NCPLOT_OPTION_PRINTSAMPLE;
+	opts.gridtype = NCBLIT_BRAILLE;
+	opts.legendstyle = NCSTYLE_ITALIC | NCSTYLE_BOLD;
+	opts.title = "frames per second";
+	ncchannels_set_fg_rgb8(&opts.minchannels, 0x80, 0x80, 0xff);
+	ncchannels_set_bg_rgb(&opts.minchannels, 0x201040);
+	ncchannels_set_bg_alpha(&opts.minchannels, NCALPHA_BLEND);
+	ncchannels_set_fg_rgb8(&opts.maxchannels, 0x80, 0xff, 0x80);
+	ncchannels_set_bg_rgb(&opts.maxchannels, 0x201040);
+	ncchannels_set_bg_alpha(&opts.maxchannels, NCALPHA_BLEND);
+	// takes ownership of newp on all paths
+	struct ncuplot *fpsplot = ncuplot_create(newp, &opts, 0, 0);
+	if (!fpsplot)
+	{
+		return EXIT_FAILURE;
+	}
+	struct ncuplot *plot = (struct ncuplot *)fpsplot;
+
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	uint64_t plottimestart = timespec_to_ns(&ts);
+
 	for (;;)
 	{
 		ncr_fullscreen(ncr);
+		vec2_t aspect = ncr_aspect(ncr);
+		glUniform2f(ul, aspect.x, aspect.y);
 
 		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
-		glUseProgram(shader_program);
 
 		glDrawArrays(GL_TRIANGLES, 0, 3);
 
 		ncr_blit(ncr);
+
+		struct timespec ts;
+		clock_gettime(CLOCK_MONOTONIC, &ts);
+
+		ncplane_move_family_top(ncuplot_plane(plot));
+
+		uint64_t ns = (timespec_to_ns(&ts) - plottimestart) / NANOSECS_IN_SEC;
+		ncuplot_add_sample(plot, ns, 1);
 	};
 
 	glDeleteVertexArrays(1, &VAO);
 	glDeleteBuffers(1, &VBO);
 	glDeleteProgram(shader_program);
-	ncr_cleanup(ncr);
+	ncr_cleanup_opengl(ncr);
 }
