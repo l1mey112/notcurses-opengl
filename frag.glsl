@@ -2,7 +2,9 @@
 
 out vec4 fragment;
 in vec2 uv;
-uniform vec2 aspect;
+
+uniform vec2 u_aspect;
+uniform float u_zoom;
 
 float sphereSDF(vec3 p, vec3 c, float r){
 	return length(p - c) - r;
@@ -39,6 +41,33 @@ vec4 march() {
 	return vec4(0.0f, 0.0f, 0.0f, 1.0f);
 }
 
-void main() {
-	fragment = march();
+const int max_iterations = 200;
+
+vec2 imaginary2(vec2 number)
+{
+	return vec2(
+		pow(number.x, 2) - pow(number.y, 2),
+		2 * number.x * number.y);
+}
+
+float mandelbrot(vec2 coord)
+{
+	vec2 z = vec2(0, 0);
+	for (int i = 0; i < max_iterations; i++)
+	{
+		z = imaginary2(z) + coord;
+		if (length(z) > 2)
+			return i / max_iterations;
+	}
+	return max_iterations;
+}
+
+void main()
+{
+	vec2 ssp = uv * aspect - aspect / 2.0;
+	vec2 imaginarycoord = ssp * 2.0 - vec2(0.5, 0);
+
+	float v = mandelbrot(imaginarycoord) / max_iterations;
+
+	fragment = vec4(vec3(v), 1);
 }
