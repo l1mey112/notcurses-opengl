@@ -15,10 +15,10 @@ float f(vec3 p){
 }
 
 vec4 march() {
-	vec2 ssp = uv * aspect;
+	vec2 ssp = uv * u_aspect;
 
 	vec3 ro = vec3(0);
-	vec3 rd = normalize(vec3(ssp - aspect / 2.0f, 1.5f));
+	vec3 rd = normalize(vec3(ssp - u_aspect / 2.0f, 1.5f));
 
 	float ray_distance = 0.0f;
 
@@ -62,10 +62,16 @@ float mandelbrot(vec2 coord)
 	return max_iterations;
 }
 
+bool cmp_epsilon(float a, float b, float eps) {
+	return abs(a - b) < eps;
+}
+
 void main()
 {
-	vec2 ssp = uv * aspect - aspect / 2.0;
+	vec2 ssp = uv * u_aspect - u_aspect / 2.0;
 	vec2 imaginarycoord = ssp * 2.0 - vec2(0.5, 0);
+
+	imaginarycoord *= u_zoom;
 
 	float v = mandelbrot(imaginarycoord) / max_iterations;
 

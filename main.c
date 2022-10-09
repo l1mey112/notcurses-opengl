@@ -399,10 +399,13 @@ int main(void)
 	glUseProgram(shader_program);
 
 	int ul = glGetUniformLocation(shader_program, "u_aspect");
-	assert(ul != -1);
+	// assert(ul != -1);
 
 	int ul1 = glGetUniformLocation(shader_program, "u_zoom");
-	assert(ul1 != -1);
+	// assert(ul1 != -1);
+
+	// int ul2 = glGetUniformLocation(shader_program, "u_mouse");
+	// assert(ul1 != -1);
 
 	GLuint VBO;
 	glGenBuffers(1, &VBO);
@@ -420,40 +423,65 @@ int main(void)
 	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(vertex_t), (void *)(sizeof(vertices->xyz)));
 	glEnableVertexAttribArray(1);
 
-	ncr_init_notcurses(ncr, NCBLIT_BRAILLE, true);
+	ncr_init_notcurses(ncr, NCBLIT_1x1, true);
 
-	#define ZOOM_EPS 0.5
-	float zoom = 0.0f;
+	int _ = notcurses_mice_enable(ncr->nc, NCMICE_MOVE_EVENT | NCMICE_BUTTON_EVENT);
+	assert(_ != -1);
+
+	float zoom = 1.0f;
+	// vec2_t zoom_center = {{1.0f, 1.0f}};
+	vec2_t mouse = {{1.0f, 1.0f}};
 
 	ncinput ni;
 	uint32_t ch;
 	for (;;)
 	{
-		if ((ch = notcurses_get_nblock(ncr->nc, &ni)) != 0 &&
-			ni.modifiers == NCTYPE_PRESS)
+		if ((ch = notcurses_get_nblock(ncr->nc, &ni)) != 0)
 		{
-			switch (ch)
+			if (nckey_mouse_p(ch))
 			{
-			case NCKEY_BUTTON4: // SCROLL UP
-			{
-				zoom += ZOOM_EPS;
-				break;
-			}
-			case NCKEY_BUTTON5: // SCROLL DOWN
-			{
-				zoom -= ZOOM_EPS;
-				break;
-			}
-			default:
-				break;
+				if (ch == NCKEY_BUTTON1 && ni.x != -1 && ni.y != -1)
+				{
+					assert(0 && "dragging not implemented");
+					// mouse.x = (float)ni.x / (float)ncr->fb_x;
+					// mouse.y = (float)ni.y / -((float)ncr->fb_y) + 1;
+					// mouse.x -= 1;
+				}
+				else
+				{
+					switch (ch)
+					{
+					case NCKEY_BUTTON4: // SCROLL UP
+					{
+						zoom += 0.05f;
+						break;
+					}
+					case NCKEY_BUTTON5: // SCROLL DOWN
+					{
+						zoom -= 0.05f;
+						break;
+					}
+					default:
+						break;
+					}
+				}
 			}
 		}
 
 		ncr_fullscreen(ncr);
 
-		vec2_t aspect = ncr_aspect(ncr);
-		glUniform2f(ul, aspect.x, aspect.y);
-		glUniform1f(ul1, zoom);
+		if (ul != -1)
+		{
+			vec2_t aspect = ncr_aspect(ncr);
+			glUniform2f(ul, aspect.x, aspect.y);
+		}
+		if (ul1 != -1)
+		{
+			glUniform1f(ul1, zoom);
+		}
+		/* if (ul2 != 1) {
+			glUniform2f(ul2, zoom_center.x, zoom_center.y);
+		} */
 
 		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
