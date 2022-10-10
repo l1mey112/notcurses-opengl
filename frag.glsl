@@ -1,10 +1,13 @@
 #version 330 core
 
+precision highp float;
+
 out vec4 fragment;
 in vec2 uv;
 
 uniform vec2 u_aspect;
 uniform float u_zoom;
+uniform vec2 u_offset;
 
 float sphereSDF(vec3 p, vec3 c, float r){
 	return length(p - c) - r;
@@ -41,7 +44,7 @@ vec4 march() {
 	return vec4(0.0f, 0.0f, 0.0f, 1.0f);
 }
 
-const int max_iterations = 200;
+const int max_iterations = 1024;
 
 vec2 imaginary2(vec2 number)
 {
@@ -50,14 +53,14 @@ vec2 imaginary2(vec2 number)
 		2 * number.x * number.y);
 }
 
-float mandelbrot(vec2 coord)
+int mandelbrot(vec2 coord)
 {
 	vec2 z = vec2(0, 0);
 	for (int i = 0; i < max_iterations; i++)
 	{
 		z = imaginary2(z) + coord;
 		if (length(z) > 2)
-			return i / max_iterations;
+			return i;
 	}
 	return max_iterations;
 }
@@ -68,12 +71,18 @@ bool cmp_epsilon(float a, float b, float eps) {
 
 void main()
 {
+	/* if (cmp_epsilon(uv.x, 0.5, 0.005) && cmp_epsilon(uv.y, 0.5, 0.005)) {
+		fragment = vec4(1,0,0,1);
+		return;
+	} */
+
 	vec2 ssp = uv * u_aspect - u_aspect / 2.0;
-	vec2 imaginarycoord = ssp * 2.0 - vec2(0.5, 0);
+	vec2 imaginarycoord = ssp * 2.0;
 
 	imaginarycoord *= u_zoom;
+	imaginarycoord += u_offset;
 
 	float v = mandelbrot(imaginarycoord) / max_iterations;
 
-	fragment = vec4(vec3(v), 1);
+	fragment = vec4(vec3(v) * vec3(1,1,1), 1);
 }
