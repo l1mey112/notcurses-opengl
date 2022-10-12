@@ -163,6 +163,15 @@ NCRenderer *ncr_init_opengl(void)
 		   glGetString(GL_VENDOR), glGetString(GL_RENDERER), glGetString(GL_VERSION),
 		   glGetString(GL_SHADING_LANGUAGE_VERSION));
 
+	int a;
+	int b[2];
+	glGetShaderPrecisionFormat(GL_FRAGMENT_SHADER, GL_HIGH_FLOAT, (int *)&b, &a);
+	printf("Floating point bits of precision: %d\n"
+	       "Lowest value: -2e%d\n"
+		   "Highest value: 2e%d\n", a, b[0], b[1]);
+	// The base 2 log of the absolute value of the minimum/maximum value that can be represented.
+
+
 	GLuint fbo;
 	glGenFramebuffers(1, &fbo);
 	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
@@ -446,7 +455,7 @@ int main(void)
 
 	float zoom = 1.0f;
 	vec2_t offset = {{0.0f, 0.0f}};
-	
+
 	uint32_t ch;
 	for (;;)
 	{
