@@ -5,12 +5,14 @@
 #include <sys/stat.h>
 
 #define CLOCK_MONOTONIC 1
+#define ARROW_KEY_OFFSET 0.05f
 
 typedef struct
 {
 	struct notcurses *nc;
 	struct ncplane *pl;
 	ncblitter_e nb;
+	float f_aspect_x, f_aspect_y;
 
 	uint32_t *fb, fb_r_x, fb_r_xl, fb_r_y, fb_x, fb_y;
 
@@ -30,6 +32,7 @@ void ncr_recalculate_dimensions(NCRenderer *ncr)
 {
 	ncr->fb_r_x = ncr->fb_x;
 	ncr->fb_r_y = ncr->fb_y;
+	ncr->f_aspect_x = ncr->f_aspect_y = 1.0f;
 
 	switch (ncr->nb)
 	{
@@ -41,14 +44,20 @@ void ncr_recalculate_dimensions(NCRenderer *ncr)
 	case NCBLIT_2x2:
 		ncr->fb_r_x *= 2;
 		ncr->fb_r_y *= 2;
+		ncr->f_aspect_x = 2.0f;
+		ncr->f_aspect_y = 2.0f;
 		break;
 	case NCBLIT_3x2:
 		ncr->fb_r_x *= 2;
 		ncr->fb_r_y *= 3;
+		ncr->f_aspect_x = 1.5f;
+		ncr->f_aspect_y = 1.0f;
 		break;
 	case NCBLIT_BRAILLE:
 		ncr->fb_r_x *= 2;
 		ncr->fb_r_y *= 4;
+		ncr->f_aspect_x = 1.0f;
+		ncr->f_aspect_y = 1.0f;
 		break;
 	case NCBLIT_PIXEL:
 	case NCBLIT_DEFAULT:
@@ -83,6 +92,9 @@ static inline vec2_t ncr_aspect(NCRenderer *ncr)
 		ret.x = 1.0f;
 		ret.y = (float)ncr->fb_y / (float)ncr->fb_x / 2.0f;
 	}
+
+	ret.x *= ncr->f_aspect_x;
+	ret.y *= ncr->f_aspect_y;
 
 	return ret;
 }
@@ -404,16 +416,13 @@ int main(void)
 	glUseProgram(shader_program);
 
 	int ul = glGetUniformLocation(shader_program, "u_aspect");
-	// assert(ul != -1);
+	assert(ul != -1);
 
 	int ul1 = glGetUniformLocation(shader_program, "u_zoom");
-	// assert(ul1 != -1);
+	assert(ul1 != -1);
 
 	int ul2 = glGetUniformLocation(shader_program, "u_offset");
 	assert(ul2 != -1);
-
-	// int ul2 = glGetUniformLocation(shader_program, "u_mouse");
-	// assert(ul1 != -1);
 
 	GLuint VBO;
 	glGenBuffers(1, &VBO);
@@ -431,55 +440,22 @@ int main(void)
 	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(vertex_t), (void *)(sizeof(vertices->xyz)));
 	glEnableVertexAttribArray(1);
 
-	ncr_init_notcurses(ncr, NCBLIT_BRAILLE, true);
+	ncr_init_notcurses(ncr, NCBLIT_2x2, false);
 
-	int _ = notcurses_mice_enable(ncr->nc, NCMICE_MOVE_EVENT | NCMICE_BUTTON_EVENT);
-	assert(_ != -1);
+	assert(notcurses_mice_enable(ncr->nc, /* NCMICE_MOVE_EVENT |  */ NCMICE_BUTTON_EVENT) != -1);
 
 	float zoom = 1.0f;
-	// vec2_t zoom_center = {{1.0f, 1.0f}};
-	// vec2_t mouse = {{1.0f, 1.0f}};
 	vec2_t offset = {{0.0f, 0.0f}};
-
-	ncinput ni;
+	
 	uint32_t ch;
 	for (;;)
 	{
-		if ((ch = notcurses_get_nblock(ncr->nc, &ni)) != 0)
+		if ((ch = notcurses_get_nblock(ncr->nc, NULL)) != 0)
 		{
-			if (nckey_mouse_p(ch))
-			{
-				if (ch == NCKEY_BUTTON1 && ni.x != -1 && ni.y != -1)
-				{
-					// assert(0 && "dragging not implemented");
-					// mouse.x = (float)ni.x / (float)ncr->fb_x;
-					// mouse.y = (float)ni.y / -((float)ncr->fb_y) + 1;
-					// mouse.x -= 1;
-				}
-				else
-				{
-					switch (ch)
-					{
-					case NCKEY_BUTTON4: // SCROLL UP
-					{
-						zoom *= 1.1f;
-						break;
-					}
-					case NCKEY_BUTTON5: // SCROLL DOWN
-					{
-						zoom /= 1.1f;
-						break;
-					}
-					default:
-						break;
-					}
-				}
-			}
-			else
+			if (nckey_synthesized_p(ch))
 			{
 				switch (ch)
 				{
-#define ARROW_KEY_OFFSET 0.05f
 				case NCKEY_LEFT:
 				{
 					offset.x -= ARROW_KEY_OFFSET * zoom;
@@ -500,6 +476,16 @@ int main(void)
 					offset.y -= ARROW_KEY_OFFSET * zoom;
 					break;
 				}
+				case NCKEY_BUTTON4: // SCROLL UP
+				{
+					zoom *= 1.1f;
+					break;
+				}
+				case NCKEY_BUTTON5: // SCROLL DOWN
+				{
+					zoom /= 1.1f;
+					break;
+				}
 				default:
 					break;
 				}
@@ -508,27 +494,16 @@ int main(void)
 
 		ncr_fullscreen(ncr);
 
-		if (ul != -1)
-		{
-			vec2_t aspect = ncr_aspect(ncr);
-			glUniform2f(ul, aspect.x, aspect.y);
-		}
-		if (ul1 != -1)
-		{
-			glUniform1f(ul1, zoom);
-		}
-		if (ul2 != 1)
-		{
-			glUniform2f(ul2, offset.x, offset.y);
-		}
+		vec2_t aspect = ncr_aspect(ncr);
+		glUniform2f(ul, aspect.x, aspect.y);
+		glUniform1f(ul1, zoom);
+		glUniform2f(ul2, offset.x, offset.y);
 
 		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
 		glDrawArrays(GL_TRIANGLES, 0, 3);
-		
-		ncr_opengl_blit(ncr);
 
-		// *((uint32_t*)(((uint8_t*)ncr->fb) + ncr->fb_r_xl * (ncr->fb_r_y / 2) + (ncr->fb_r_x / 2))) = 0xFFFa;
+		ncr_opengl_blit(ncr);
 
 		ncr_blit(ncr);
 	}
