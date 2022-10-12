@@ -18,9 +18,6 @@ typedef struct
 
 	GLuint fbo, fbtex;
 	GLFWwindow *offscreen_ctx;
-
-	uint64_t fps_timestart;
-	struct ncuplot *fps_plot;
 } NCRenderer;
 
 static inline size_t ncr_sizeof_fb(NCRenderer *ncr)
@@ -201,7 +198,7 @@ timespec_to_ns(const struct timespec *ts)
 	return ts->tv_sec * NANOSECS_IN_SEC + ts->tv_nsec;
 }
 
-void ncr_init_notcurses(NCRenderer *ncr, ncblitter_e nb, bool use_fps_graph)
+void ncr_init_notcurses(NCRenderer *ncr, ncblitter_e nb)
 {
 	ncr->nc = notcurses_init(NULL, stdout);
 	ncr->pl = notcurses_stdplane(ncr->nc);
@@ -210,66 +207,6 @@ void ncr_init_notcurses(NCRenderer *ncr, ncblitter_e nb, bool use_fps_graph)
 
 	ncr->fb_x = ncr->fb_y = -1;
 	ncr_fullscreen(ncr);
-
-	//
-	// ripped fps plot from the notcurses demo
-	//
-	if (use_fps_graph)
-	{
-#define FPSGRAPH_MAX_COLS 72
-
-		const int PLOTHEIGHT = 6;
-		unsigned dimy, dimx;
-		struct ncplane *stdn = notcurses_stddim_yx(ncr->nc, &dimy, &dimx);
-		ncplane_options nopts = {
-			.y = NCALIGN_BOTTOM,
-			.x = NCALIGN_CENTER,
-			.rows = PLOTHEIGHT,
-			.cols = dimx > FPSGRAPH_MAX_COLS ? FPSGRAPH_MAX_COLS : dimx,
-			.userptr = NULL,
-			.name = "fps",
-			.resizecb = ncplane_resize_realign,
-			.flags = NCPLANE_OPTION_HORALIGNED | NCPLANE_OPTION_VERALIGNED | NCPLANE_OPTION_FIXED,
-		};
-		struct ncplane *newp = ncplane_create(stdn, &nopts);
-		assert(newp);
-
-		uint32_t style = 0;
-		uint64_t channels = 0;
-		ncchannels_set_fg_alpha(&channels, NCALPHA_BLEND);
-		ncchannels_set_fg_rgb(&channels, 0x201040);
-		ncchannels_set_bg_alpha(&channels, NCALPHA_BLEND);
-		ncchannels_set_bg_rgb(&channels, 0x201040);
-		ncplane_set_base(newp, "", style, channels);
-		ncplot_options opts;
-		memset(&opts, 0, sizeof(opts));
-		opts.flags = NCPLOT_OPTION_LABELTICKSD |
-					 NCPLOT_OPTION_EXPONENTIALD |
-					 NCPLOT_OPTION_DETECTMAXONLY |
-					 NCPLOT_OPTION_PRINTSAMPLE;
-		opts.gridtype = NCBLIT_BRAILLE;
-		opts.legendstyle = NCSTYLE_ITALIC | NCSTYLE_BOLD;
-		opts.title = "frames per second";
-		ncchannels_set_fg_rgb8(&opts.minchannels, 0x80, 0x80, 0xff);
-		ncchannels_set_bg_rgb(&opts.minchannels, 0x201040);
-		ncchannels_set_bg_alpha(&opts.minchannels, NCALPHA_BLEND);
-		ncchannels_set_fg_rgb8(&opts.maxchannels, 0x80, 0xff, 0x80);
-		ncchannels_set_bg_rgb(&opts.maxchannels, 0x201040);
-		ncchannels_set_bg_alpha(&opts.maxchannels, NCALPHA_BLEND);
-		// takes ownership of newp on all paths
-		struct ncuplot *fpsplot = ncuplot_create(newp, &opts, 0, 0);
-		assert(fpsplot);
-
-		struct timespec ts;
-		clock_gettime(CLOCK_MONOTONIC, &ts);
-
-		ncr->fps_timestart = timespec_to_ns(&ts);
-		ncr->fps_plot = fpsplot;
-	}
-	else
-	{
-		ncr->fps_plot = NULL;
-	}
 }
 
 void ncr_cleanup_opengl(NCRenderer *ncr)
@@ -289,17 +226,6 @@ void ncr_blit(NCRenderer *ncr)
 
 	ncblit_rgba(ncr->fb, ncr->fb_r_xl, &opts);
 	notcurses_render(ncr->nc);
-
-	if (ncr->fps_plot)
-	{
-		struct timespec ts;
-		clock_gettime(CLOCK_MONOTONIC, &ts);
-
-		ncplane_move_family_top(ncuplot_plane(ncr->fps_plot));
-
-		uint64_t ns = (timespec_to_ns(&ts) - ncr->fps_timestart) / NANOSECS_IN_SEC;
-		ncuplot_add_sample(ncr->fps_plot, ns, 1);
-	}
 }
 
 void ncr_opengl_blit(NCRenderer *ncr)
@@ -449,7 +375,7 @@ int main(void)
 	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(vertex_t), (void *)(sizeof(vertices->xyz)));
 	glEnableVertexAttribArray(1);
 
-	ncr_init_notcurses(ncr, NCBLIT_2x2, false);
+	ncr_init_notcurses(ncr, NCBLIT_2x2);
 
 	assert(notcurses_mice_enable(ncr->nc, /* NCMICE_MOVE_EVENT |  */ NCMICE_BUTTON_EVENT) != -1);
 
